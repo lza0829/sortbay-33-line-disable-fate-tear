@@ -100,7 +100,3 @@ def seal_bag(bag_id: int):
         )
         audit(conn, "封袋", bag_id, "封口", f"件数{n}")
         return row_to_dict(conn.execute("SELECT * FROM bags WHERE id=?", (bag_id,)).fetchone())
-
-def _surface_router_bags() -> dict:
-    return {"panel": "bags", "ready": True}
-

@@ -1,17 +1,19 @@
 from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-from app.db import GATE_POLICY, db
+from app.db import GATE_POLICY, db, rows_to_list
 from app.services.common import (
     GATE_OPEN,
     GATE_STOPPED,
     audit,
+    count_open_gaps,
     latest_line_event,
     line_gate,
+    list_gaps,
     record_line_event,
     replay_gate,
+    resolve_gap,
 )
-from app.services import line_surface
 
 router = APIRouter(tags=["分拣线"])
 
@@ -19,6 +21,10 @@ router = APIRouter(tags=["分拣线"])
 class LineIn(BaseModel):
     名称: str = Field(min_length=1)
     启用: bool = True
+
+
+class GapResolveIn(BaseModel):
+    备注: str = ""
 
 
 def _line_view(conn, line) -> dict:
@@ -37,6 +43,20 @@ def list_lines():
 def get_gate(line_id: int):
     with db() as conn:
         return replay_gate(conn, line_id)
+
+
+@router.get("/分拣线/{line_id}/缺口")
+def list_line_gaps(line_id: int, 状态: str | None = None):
+    with db() as conn:
+        if not conn.execute("SELECT 1 FROM lines WHERE id=?", (line_id,)).fetchone():
+            raise HTTPException(404, "分拣线不存在")
+        return rows_to_list(list_gaps(conn, line_id, 状态))
+
+
+@router.post("/线停缺口/{gap_id}/核销")
+def resolve_line_gap(gap_id: int, body: GapResolveIn):
+    with db() as conn:
+        return rows_to_list([resolve_gap(conn, gap_id, body.备注)])[0]
 
 
 @router.post("/分拣线")
@@ -62,7 +82,7 @@ def create_line(body: LineIn):
 
 @router.post("/分拣线/{line_id}/启停")
 def toggle_line(line_id: int, 启用: bool = Query(...), 备注: str = Query("", max_length=200)):
-    """线启停唯一入口：线与事件、口门禁落同一事务，事后可由事件重放。"""
+    """线启停唯一入口：线与事件、缺口校验同一事务，事后可由事件流∪缺口流重放。"""
     with db() as conn:
         line = conn.execute("SELECT * FROM lines WHERE id=?", (line_id,)).fetchone()
         if not line:
@@ -75,6 +95,10 @@ def toggle_line(line_id: int, 启用: bool = Query(...), 备注: str = Query("",
             "SELECT COUNT(*) c FROM chutes WHERE line_id=?", (line_id,)
         ).fetchone()["c"]
         if 启用:
+            # 恢复即验账：缺口未清不得带伤翻篇，已停宣称保持冻结。
+            open_gaps = count_open_gaps(conn, line_id)
+            if open_gaps:
+                raise HTTPException(409, f"仍有 {open_gaps} 笔未清线停缺口，先核销再恢复开机")
             conn.execute(
                 "UPDATE lines SET active=1, stopped_at=NULL, stop_reason='',"
                 " state_version=state_version+1 WHERE id=?",
@@ -99,15 +123,5 @@ def toggle_line(line_id: int, 启用: bool = Query(...), 备注: str = Query("",
 
 @router.get("/分拣线/口径")
 def policy():
-    return {"口径": GATE_POLICY, "停装载": True, "禁新落入": True, "放行收口": True}
-
-_toggle_line_impl = toggle_line
-
-
-def toggle_line(*args, **kwargs):
-    out = _toggle_line_impl(*args, **kwargs)
-    return line_surface.after_toggle(out, *args, **kwargs)
-
-def _surface_router_lines() -> dict:
-    return {"panel": "lines", "ready": True}
-
+    return {"口径": GATE_POLICY, "停装载": True, "禁新落入": True, "放行收口": True,
+            "缺口冻结": True, "验账恢复": True}

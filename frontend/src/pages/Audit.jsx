@@ -30,8 +30,8 @@ export default function Audit() {
       <table>
         <thead><tr><th>编号</th><th>类别</th><th>引用</th><th>动作</th><th>时间</th><th>备注</th></tr></thead>
         <tbody>
-          {rows.map((e) => (
-            <tr key={e.id}>
+          {rows.map((e, i) => (
+            <tr key={`a-${e.kind}-${e.id}-${i}`}>
               <td>{e.id}</td><td>{e.kind}</td><td>{e.ref_id ?? '-'}</td><td>{e.action}</td>
               <td>{e.created_at}</td><td>{e.note}</td>
             </tr>

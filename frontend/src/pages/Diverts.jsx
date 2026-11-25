@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
 
-const surface_panel = true
 export default function Diverts() {
   const [batches, setBatches] = useState([])
   const [scans, setScans] = useState([])
@@ -20,7 +19,7 @@ export default function Diverts() {
     } catch (e) { setErr(e.message) }
   }
   return (
-    <div className={surface_panel ? "panel" : "panel"}>
+    <div className="panel">
       <h2>错分回流</h2>
       {err && <div className="err">{err}</div>}
       <p className="muted">回流属收口：分拣线停机后对已有扫描仍可建回流批次；新件已由装载入口拒装。</p>

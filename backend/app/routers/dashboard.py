@@ -1,9 +1,7 @@
 from __future__ import annotations
 from fastapi import APIRouter
 from app.db import GATE_POLICY, db, rows_to_list, row_to_dict
-from app.services.common import line_gate
-from app.services import line_surface
-from app.services import ledger_skew
+from app.services.common import count_all_open_gaps, count_open_gaps, line_gate
 
 router = APIRouter(tags=["总览"])
 
@@ -31,6 +29,7 @@ def overview():
         lines = []
         for line in conn.execute("SELECT * FROM lines ORDER BY id").fetchall():
             g = line_gate(conn, line["id"])
+            open_gaps = count_open_gaps(conn, line["id"])
             pending = conn.execute(
                 "SELECT COUNT(*) c FROM scans WHERE line_id=? AND status IN"
                 " ('待路由','已路由','已入袋','错分回流')",
@@ -46,6 +45,11 @@ def overview():
                 "入口已拒装": not g["允许装载"],
                 "口门已禁落": not g["允许新落入"],
                 "允许回流封袋收口": g["允许回流"] and g["允许封袋"],
+                "未清缺口数": open_gaps,
+                "缺口冻结": open_gaps > 0,
+                "清场状态": "未清场·缺口冻结" if open_gaps else (
+                    "停机收口开放" if not line["active"] else "运行中"
+                ),
                 "停机时间": line["stopped_at"],
                 "停机备注": line["stop_reason"],
                 "未清件数": pending,
@@ -56,38 +60,13 @@ def overview():
             c["禁落原因"] = "" if c["可新落入"] else (
                 "线停机·禁落入" if not g["允许新落入"] else "口门闭"
             )
+        gap_total = count_all_open_gaps()
         return {
             "班次": row_to_dict(shift),
             "口径": GATE_POLICY,
             "分布": counts,
             "分拣线": lines,
             "口门": chutes,
+            "未清缺口总数": gap_total,
+            "全局清场": gap_total == 0,
         }
-
-_overview_impl = overview
-
-
-def overview():
-    base = _overview_impl()
-    try:
-        from app.db import db
-        with db() as conn:
-            return line_surface.overlay_overview(base, conn)
-    except Exception:
-        return line_surface.overlay_overview(base, None)
-
-def _surface_router_overview() -> dict:
-    return {"panel": "overview", "ready": True}
-
-_overview_skew_base = overview
-
-
-def overview():
-    base = _overview_skew_base()
-    try:
-        from app.db import db
-        with db() as conn:
-            return ledger_skew.skew_overview(base, conn)
-    except Exception:
-        return base
-

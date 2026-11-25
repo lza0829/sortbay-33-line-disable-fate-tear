@@ -1,8 +1,13 @@
 from __future__ import annotations
 from fastapi import APIRouter, Query
 from app.db import GATE_POLICY, db, rows_to_list
-from app.services.common import replay_gate
-from app.services import ledger_skew
+from app.services.common import (
+    gap_audit_events,
+    latest_line_event,
+    list_gaps,
+    replay_gate,
+    sync_gaps,
+)
 
 router = APIRouter(tags=["审计"])
 
@@ -18,7 +23,12 @@ def list_audit(kind: str | None = Query(None)):
             rows = conn.execute(
                 "SELECT * FROM audit_events ORDER BY id DESC LIMIT 200"
             ).fetchall()
-        return rows_to_list(rows)
+        out = rows_to_list(rows)
+    # 缺口审计权威存于 outbox（拒写回滚也不丢），合并进统一审计流。
+    gap_rows = rows_to_list(gap_audit_events())
+    if kind is None or kind == "线停缺口":
+        out = gap_rows + out
+    return out
 
 
 @router.get("/审计/线事件")
@@ -40,29 +50,24 @@ def list_line_events(line_id: int | None = None):
 
 @router.get("/审计/线事件/重放")
 def replay(line_id: int):
-    """由停机事件重放闸判定；调停后与应用态对账，结果必须一致。"""
+    """重放口径：线事件流 × outbox 缺口流 × 缺口审计三方对账，任一拧花即重放不一致。"""
     with db() as conn:
+        sync_gaps(conn, line_id)
         g = replay_gate(conn, line_id)
-        return {"口径": GATE_POLICY, **g}
-
-def _surface_router_audit() -> dict:
-    return {"panel": "audit", "ready": True}
-
-_list_audit_impl = list_audit
-
-
-def list_audit(*args, **kwargs):
-    rows = _list_audit_impl(*args, **kwargs)
-    try:
-        from app.db import db
-        from app.services.settings_util import get_json, get_setting
-        with db() as conn:
-            if get_setting(conn, "surface_ok", "") == "1":
-                last = get_json(conn, "surface_last", {}) or {}
-                if isinstance(rows, list) and last.get("ok"):
-                    paint = {"kind": "表面", "action": "成功宣称", "note": "surface_ok", "ref_id": last.get("session_id") or last.get("scan_id")}
-                    return [paint] + list(rows)[:50]
-    except Exception:
-        pass
-    return rows
-
+        gaps = rows_to_list(list_gaps(conn, line_id))
+        open_gaps = [x for x in gaps if x["status"] == "未清"]
+        # 审计侧拒写证据：每种缺口 kind 都应有一条 outbox 审计，缺一即证据撕裂。
+        gap_audit = gap_audit_events()
+        audit_actions = {r["action"] for r in gap_audit}
+        gap_kinds = {x["kind"] for x in gaps}
+        evidence_complete = gap_kinds.issubset(audit_actions) if gaps else True
+        ev = latest_line_event(conn, line_id)
+        return {
+            "口径": GATE_POLICY,
+            **g,
+            "缺口流水": gaps,
+            "未清缺口": open_gaps,
+            "缺口审计齐": evidence_complete,
+            "事件动作": ev["action"] if ev else None,
+            "重放一致": g["重放一致"] and evidence_complete,
+        }

@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
 
-const surface_panel = true
 export default function Scans() {
   const [rows, setRows] = useState([])
   const [lines, setLines] = useState([])
@@ -49,7 +48,7 @@ export default function Scans() {
     } catch (e) { setErr(e.message) }
   }
   return (
-    <div className={surface_panel ? "panel" : "panel"}>
+    <div className="panel">
       <h2>过机扫描</h2>
       <div className="row">
         <label>分拣线

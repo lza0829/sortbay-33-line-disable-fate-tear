@@ -4,4 +4,5 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 ENV SORTBAY_DB=/data/sortbay.db
+ENV SORTBAY_OUTBOX_DB=/data/sortbay_outbox.db
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "11600"]

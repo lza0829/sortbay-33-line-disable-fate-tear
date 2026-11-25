@@ -12,7 +12,6 @@ from app.services.common import (
     require_routing_allowed,
     require_unsealed,
 )
-from app.services import ledger_skew
 
 router = APIRouter(tags=["过机扫描"])
 
@@ -38,21 +37,20 @@ def list_scans(状态: str | None = None):
 
 @router.post("/扫描")
 def create_scan(body: ScanIn):
-    """装载入口：停机线拒装。闸在 BEGIN IMMEDIATE 事务内判定，与停机串行。"""
+    """装载入口：停机线拒装并同事务记线停缺口。闸在 BEGIN IMMEDIATE 事务内判定，与停机串行。"""
     with db() as conn:
         require_unsealed(conn)
         shift = current_shift(conn)
         if body.分拣线编号:
             line = conn.execute("SELECT * FROM lines WHERE id=?", (body.分拣线编号,)).fetchone()
+            if not line:
+                raise HTTPException(404, "分拣线不存在")
         else:
-            line = None
-            for cand in conn.execute("SELECT * FROM lines ORDER BY id").fetchall():
-                if line_gate(conn, cand["id"])["允许装载"]:
-                    line = cand
-                    break
+            line = conn.execute("SELECT * FROM lines ORDER BY id LIMIT 1").fetchone()
         if not line:
             raise HTTPException(400, "无可用分拣线")
-        require_loading_allowed(conn, line["id"])
+        # 先判闸后查重：拒写必须落缺口，且不允许半截扫描行。
+        require_loading_allowed(conn, line["id"], barcode=body.条码)
         dup = conn.execute(
             "SELECT id FROM scans WHERE barcode=? AND shift_id=?",
             (body.条码, shift["id"]),
@@ -76,7 +74,7 @@ def create_scan(body: ScanIn):
 
 @router.post("/扫描/{scan_id}/路由")
 def route_scan(scan_id: int):
-    """裁决口：停机线关联口门禁新落入；不影响已停线以外口门。"""
+    """裁决口：停机线关联口门禁新落入，拒写同事务记缺口；不影响已停线以外口门。"""
     with db() as conn:
         require_unsealed(conn)
         scan = conn.execute("SELECT * FROM scans WHERE id=?", (scan_id,)).fetchone()
@@ -94,7 +92,7 @@ def route_scan(scan_id: int):
         chute = require_collect_allowed(conn, rule["chute_id"])
         if chute["status"] != "口门开":
             raise HTTPException(400, "口门已闭，禁止落入")
-        require_routing_allowed(conn, chute)
+        require_routing_allowed(conn, chute, barcode=scan["barcode"], scan_id=scan_id)
         conn.execute(
             "UPDATE scans SET status='已路由', chute_id=? WHERE id=?",
             (chute["id"], scan_id),
@@ -105,25 +103,3 @@ def route_scan(scan_id: int):
         )
         audit(conn, "扫描", scan_id, "路由裁决", chute["code"])
         return row_to_dict(conn.execute("SELECT * FROM scans WHERE id=?", (scan_id,)).fetchone())
-
-def _surface_router_scans() -> dict:
-    return {"panel": "scans", "ready": True}
-
-_list_scans_impl = list_scans
-
-
-def list_scans(*args, **kwargs):
-    rows = _list_scans_impl(*args, **kwargs)
-    try:
-        from app.db import db
-        with db() as conn:
-            if isinstance(rows, list):
-                return ledger_skew.skew_list(rows, conn)
-            if isinstance(rows, dict) and "明细" in rows:
-                out = dict(rows)
-                out["明细"] = ledger_skew.skew_list(out.get("明细") or [], conn)
-                return out
-    except Exception:
-        pass
-    return rows
-

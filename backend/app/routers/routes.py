@@ -52,7 +52,3 @@ def upsert_route(body: RouteIn):
             action = "新建路由"
         audit(conn, "路由表", rid, action, body.目的地码)
         return row_to_dict(conn.execute("SELECT * FROM route_rules WHERE id=?", (rid,)).fetchone())
-
-def _surface_router_routes() -> dict:
-    return {"panel": "routes", "ready": True}
-

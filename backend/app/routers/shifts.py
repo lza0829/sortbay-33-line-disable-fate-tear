@@ -2,7 +2,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from app.db import db, rows_to_list, row_to_dict
-from app.services.common import audit, line_gate, now_str
+from app.services.common import audit, count_all_open_gaps, count_open_gaps, line_gate, now_str
 
 router = APIRouter(tags=["班次"])
 
@@ -44,9 +44,11 @@ def reconcile(shift_id: int | None = None):
             "SELECT COUNT(*) c FROM scans WHERE shift_id=? AND status IN ('待路由','错分回流')",
             (sid,),
         ).fetchone()["c"]
+        gap_n = count_all_open_gaps()
         lines = []
         for line in conn.execute("SELECT * FROM lines ORDER BY id").fetchall():
             g = line_gate(conn, line["id"])
+            line_gaps = count_open_gaps(conn, line["id"])
             lines.append({
                 "编号": line["id"],
                 "名称": line["name"],
@@ -54,6 +56,8 @@ def reconcile(shift_id: int | None = None):
                 "装载": "已拒装" if not g["允许装载"] else "可装载",
                 "口门": "已禁落" if not g["允许新落入"] else "可落入",
                 "收口": "放行" if g["允许回流"] and g["允许封袋"] else "已挡",
+                "未清缺口": line_gaps,
+                "缺口冻结": line_gaps > 0,
                 "本班件数": conn.execute(
                     "SELECT COUNT(*) c FROM scans WHERE shift_id=? AND line_id=?", (sid, line["id"])
                 ).fetchone()["c"],
@@ -66,6 +70,8 @@ def reconcile(shift_id: int | None = None):
             "已封袋数": sealed_bag,
             "回流批次数": divert_n,
             "未清件数": pending,
+            "未清线停缺口": gap_n,
+            "全局清场": gap_n == 0,
             "分拣线": lines,
             "合计校验": scan_n == sum(l["本班件数"] for l in lines),
         }
@@ -112,7 +118,3 @@ def seal_shift(shift_id: int):
         )
         audit(conn, "班次", shift_id, "封班", "")
         return row_to_dict(conn.execute("SELECT * FROM shifts WHERE id=?", (shift_id,)).fetchone())
-
-def _surface_router_shifts() -> dict:
-    return {"panel": "shifts", "ready": True}
-

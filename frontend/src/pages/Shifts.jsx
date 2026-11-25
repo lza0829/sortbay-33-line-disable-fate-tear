@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../api'
 
-const surface_panel = true
 export default function Shifts() {
   const [rows, setRows] = useState([])
   const [rec, setRec] = useState(null)
@@ -16,28 +15,36 @@ export default function Shifts() {
     catch (e) { setErr(e.message) }
   }
   return (
-    <div className={surface_panel ? "panel" : "panel"}>
+    <div className="panel">
       <h2>班次对账</h2>
       {err && <div className="err">{err}</div>}
       {rec && rec.合计校验 === false && <div className="err">分拣线本班件数与扫描总数对不上，请查审计。</div>}
+      {rec && (
+        rec.全局清场
+          ? <div className="msg">线停缺口已清，全局清场。</div>
+          : <div className="err">仍有 {rec.未清线停缺口} 笔未清线停缺口，未清场，已停宣称冻结中。</div>
+      )}
       {rec && (
         <div className="grid">
           <div className="stat"><div className="n">{rec.扫描总数}</div><div className="l">扫描总数</div></div>
           <div className="stat"><div className="n">{rec.已路由及以上}</div><div className="l">已路由及以上</div></div>
           <div className="stat"><div className="n">{rec.已封袋数}</div><div className="l">已封袋数</div></div>
           <div className="stat"><div className="n">{rec.未清件数}</div><div className="l">未清件数</div></div>
+          <div className="stat"><div className="n">{rec.未清线停缺口}</div><div className="l">未清线停缺口</div></div>
         </div>
       )}
       {rec && (
         <>
           <h3>分拣线对账</h3>
           <table>
-            <thead><tr><th>线</th><th>闸</th><th>装载</th><th>口门</th><th>收口</th><th>本班件数</th></tr></thead>
+            <thead><tr><th>线</th><th>闸</th><th>装载</th><th>口门</th><th>收口</th><th>未清缺口</th><th>本班件数</th></tr></thead>
             <tbody>
               {(rec.分拣线 || []).map((l) => (
                 <tr key={l.编号}>
                   <td>{l.名称}</td><td>{l.闸}</td><td>{l.装载}</td><td>{l.口门}</td>
-                  <td>{l.收口}</td><td>{l.本班件数}</td>
+                  <td>{l.收口}</td>
+                  <td>{l.缺口冻结 ? <span className="bad">{l.未清缺口}·冻结</span> : 0}</td>
+                  <td>{l.本班件数}</td>
                 </tr>
               ))}
             </tbody>
